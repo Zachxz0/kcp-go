@@ -148,22 +148,6 @@ func newUDPSession(conv uint32, dataShards, parityShards int, l *Listener, conn 
 		}
 	}
 
-	// FEC codec initialization
-	sess.fecDecoder = newFECDecoder(rxFECMulti*(dataShards+parityShards), dataShards, parityShards)
-	if sess.block != nil {
-		sess.fecEncoder = newFECEncoder(dataShards, parityShards, cryptHeaderSize)
-	} else {
-		sess.fecEncoder = newFECEncoder(dataShards, parityShards, 0)
-	}
-
-	// calculate additional header size introduced by FEC and encryption
-	if sess.block != nil {
-		sess.headerSize += cryptHeaderSize
-	}
-	if sess.fecEncoder != nil {
-		sess.headerSize += fecHeaderSizePlus2
-	}
-
 	sess.kcp = NewKCP(conv, func(buf []byte, size int) {
 		if size >= IKCP_OVERHEAD+sess.headerSize {
 			sess.output(buf[:size])
@@ -997,3 +981,25 @@ func NewConn(raddr string, block BlockCrypt, dataShards, parityShards int, conn 
 	}
 	return NewConn2(udpaddr, block, dataShards, parityShards, conn)
 }
+
+func NewConnEx(convid uint32, connected bool, raddr string, block BlockCrypt, dataShards, parityShards int, conn *net.UDPConn) (*UDPSession, error) {
+	udpaddr, err := net.ResolveUDPAddr("udp", raddr)
+	if err != nil {
+		return nil, errors.Wrap(err, "net.ResolveUDPAddr")
+	}
+
+	var pConn net.PacketConn = conn
+	if connected {
+		pConn = &connectedUDPConn{conn}
+	}
+
+	return newUDPSession(convid, dataShards, parityShards, nil, pConn, udpaddr, block), nil
+}
+
+// connectedUDPConn is a wrapper for net.UDPConn which converts WriteTo syscalls
+// to Write syscalls that are 4 times faster on some OS'es. This should only be
+// used for connections that were produced by a net.Dial* call.
+type connectedUDPConn struct{ *net.UDPConn }
+
+// WriteTo redirects all writes to the Write syscall, which is 4 times faster.
+func (c *connectedUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) { return c.Write(b) }
